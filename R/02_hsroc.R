@@ -32,7 +32,17 @@ fit <- reitsma(hs, formula = cbind(tsens, tfpr) ~ 1,
 sm  <- summary(fit)
 
 ## Summary sensitivity and specificity with 95% CI (back-transformed).
-print(sm$coefficients[c("sensitivity", "specificity"), , drop = FALSE])
+## mada::reitsma reports the operating point as 'sensitivity' and 'false pos. rate'
+## (FPR); specificity = 1 - FPR, with CI endpoints swapped on back-transformation.
+co <- sm$coefficients
+sens_row <- co["sensitivity", , drop = FALSE]
+fpr_row  <- co["false pos. rate", , drop = FALSE]
+spec_est <- 1 - fpr_row[1, "Estimate"]
+spec_ci  <- rev(1 - c(fpr_row[1, "95%ci.lb"], fpr_row[1, "95%ci.ub"]))
+cat(sprintf("Summary sensitivity = %.4f [%.4f, %.4f]\n",
+            sens_row[1, "Estimate"], sens_row[1, "95%ci.lb"], sens_row[1, "95%ci.ub"]))
+cat(sprintf("Summary specificity = %.4f [%.4f, %.4f]\n",
+            spec_est, spec_ci[1], spec_ci[2]))
 
 ## ---- HSROC area under the curve ---------------------------------------------
 auc_hsroc <- mada::AUC(fit)

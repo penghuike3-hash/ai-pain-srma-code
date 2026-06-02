@@ -48,7 +48,7 @@ hs <- dat[dat$flag_hsroc, c("TP", "FP", "TN", "FN")]
 hs <- hs[stats::complete.cases(hs), ]
 ess  <- with(hs, 4 * (TP + FN) * (TN + FP) / ((TP + FN) + (TN + FP)))
 lndor <- with(hs, log(((TP + .5) * (TN + .5)) / ((FP + .5) * (FN + .5))))
-deeks_p <- summary(lm(lndor ~ I(1 / sqrt(ess))))$coefficients["I(1/sqrt(ess))", "Pr(>|t|)"]
+deeks_p <- summary(lm(lndor ~ I(1 / sqrt(ess)), weights = ess))$coefficients["I(1/sqrt(ess))", "Pr(>|t|)"]
 cat(sprintf("  HSROC  Deeks p = %.3f\n", deeks_p))
 
 ## ---- GRADE-DTA certainty summary --------------------------------------------
