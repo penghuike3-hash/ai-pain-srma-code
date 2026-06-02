@@ -103,8 +103,8 @@ fit <- reitsma(tab, method = "ml"); s <- summary(fit)
 co <- s$coefficients
 sens <- plogis(co["tsens.(Intercept)","Estimate"])
 spec <- 1 - plogis(co["tfpr.(Intercept)","Estimate"])
-sens_ci <- plogis(co["tsens.(Intercept)", c("CILB","CIUB")])
-spec_ci <- rev(1 - plogis(co["tfpr.(Intercept)", c("CILB","CIUB")]))
+sens_ci <- plogis(co["tsens.(Intercept)", c("95%ci.lb","95%ci.ub")])
+spec_ci <- rev(1 - plogis(co["tfpr.(Intercept)", c("95%ci.lb","95%ci.ub")]))
 auc  <- s$AUC$AUC
 cat(sprintf("  k=%d   sens=%.3f [%.3f, %.3f]   spec=%.3f [%.3f, %.3f]   AUC=%.3f\n\n",
             nrow(tab), sens, sens_ci[1], sens_ci[2], spec, spec_ci[1], spec_ci[2], auc))

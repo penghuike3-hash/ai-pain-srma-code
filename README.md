@@ -16,7 +16,7 @@ Reproducible R code for the systematic review and diagnostic test-accuracy meta-
 
 `RUN_ME.R` finds itself and the dataset automatically (no `setwd()` needed), installs any missing packages, runs every pool, prints each result next to the published value, and writes `outputs/reproduction_summary.txt` and `outputs/SG1-SG8_results.csv`.
 
-It reproduces: pool sizes 14/69/43/35/25; HSROC summary sensitivity 0.904, specificity 0.912, AUC 0.951; pooled AUROC 0.904 [0.879, 0.924], I² 94.5%, 95% prediction interval 0.618–0.982; MAE 0.79; Pearson r 0.688; ICC 0.638; and all eight subgroup analyses (Q_M p ≥ 0.25).
+It reproduces: pool sizes 14/69/43/35/25; HSROC summary sensitivity 0.904, specificity 0.912, AUC 0.951; pooled AUROC 0.904 [0.879, 0.924], I² 94.5%, 95% prediction interval 0.618–0.982; MAE 0.79; Pearson r 0.688; ICC 0.638; and all eight subgroup analyses (Q_M p ≥ 0.20).
 
 ## Repository contents
 
