@@ -28,7 +28,7 @@ message(sprintf("Continuity correction (0.5) applies to %d study(ies): %s",
 
 ## ---- bivariate (Reitsma) model ----------------------------------------------
 fit <- reitsma(hs, formula = cbind(tsens, tfpr) ~ 1,
-               method = "reml", correction = 0.5)
+               method = "ml", correction = 0.5)
 sm  <- summary(fit)
 
 ## Summary sensitivity and specificity with 95% CI (back-transformed).
