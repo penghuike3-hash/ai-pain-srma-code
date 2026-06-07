@@ -1,216 +1,468 @@
 ###############################################################################
-#  RUN_ME.R  —  AI Pain Assessment SR-MA: one-click reproduction
+# RUN_ME.R  —  AI Pain Assessment SR/MA : re-analysis on the finalised dataset
+# -----------------------------------------------------------------------------
+# Input  : Supplementary_Data_Extracted_Dataset_v6_final.xlsx  ("Studies" sheet)
+# N      : 188 studies
+# Pools  : AUROC (k=62) | HSROC (k=11) | PCC (k=31) | ICC (k=22)
+#          MAE -> descriptive only (NOT pooled)
 #
-#  HOW TO RUN (any ONE of these — no setwd, no path editing needed):
-#    • RStudio:  open this file, click "Source" (top-right of the editor)
-#    • Double-click the file (Windows, if .R is associated with Rscript)
-#    • Console:  source("RUN_ME.R")
+# HOW TO RUN
+#   1. install.packages(c("metafor","mada","readxl"))     # one time
+#   2. put this file next to the .xlsx (or edit INPUT_XLSX below)
+#   3. source("RUN_ME.R")    # all results print to console + land in ./results/
 #
-#  It finds itself, finds the dataset automatically (looks next to this script,
-#  in ./data/, on the Desktop, and in common folders), installs any missing
-#  packages, runs every pool, prints the numbers next to the published values,
-#  and writes results to an "outputs" folder beside this script.
+# WHY R: the HSROC bivariate (Reitsma) model needs mada and has no Python
+# equivalent; everything else is reproduced with the same methods used originally.
 #
-#  Dataset needed (place it anywhere near this script, e.g. same folder or
-#  a ./data subfolder):  Supplementary_Data_Extracted_Dataset.xlsx
+# SELF-CHECK -- AUTHORITATIVE values from this script's own R run (metafor PM /
+# mada ML). Confirmed by independent Paule-Mandel root-finding. If a POINT
+# ESTIMATE differs by > 0.01, a column was read wrong -- stop and check the
+# flag/value columns; do NOT hand-edit numbers.
+#     AUROC  k=62   0.887  [0.858, 0.911]   PI[0.593, 0.977]   I2 = 94.5%   (PM, tau^2=0.722)
+#     PCC    k=31   0.691  [0.599, 0.765]                      I2 = 92.2%   (REML)
+#     ICC    k=22   0.590  [0.492, 0.672]                      I2 = 86.4%   (REML)
+#     HSROC  k=11   sens 0.882 [0.833,0.917]  spec 0.867 [0.790,0.919]  AUC 0.929   (Reitsma ML)
+#     Subgroups: SG1-SG8, per-stratum REML, min k=3 (see section 7)
+#
+# METHODS match the deposited modular pipeline exactly: AUROC=PM (tau^2=0.722;
+# an earlier hand-rolled PM root of 0.34 gave a wrong 0.878/89% -- ignore it),
+# PCC/ICC=REML (04_continuous_pools.R), HSROC=reitsma ML + 0.5 correction
+# (02_hsroc.R), subgroups=REML min-k 3 (05_subgroups_SG1-SG8.R).
 ###############################################################################
 
-options(stringsAsFactors = FALSE, warn = 1)
-cat("\n==================================================================\n")
-cat(" AI pain assessment DTA meta-analysis — one-click reproduction\n")
-cat("==================================================================\n\n")
-
-## ---------------------------------------------------------------- 0. locate
-# Find the folder this script lives in, robustly across run methods.
-this_file <- tryCatch({
-  a <- commandArgs(FALSE)
-  f <- sub("^--file=", "", a[grep("^--file=", a)])
-  if (length(f)) normalizePath(f[1]) else NA_character_
-}, error = function(e) NA_character_)
-if (is.na(this_file) && requireNamespace("rstudioapi", quietly = TRUE)) {
-  this_file <- tryCatch(rstudioapi::getSourceEditorContext()$path,
-                        error = function(e) NA_character_)
+## ---- 0. CONFIG --------------------------------------------------------------
+## --- self-locate the dataset so you can just Source / double-click (no setwd) -
+.this_file <- function() {
+  ca <- commandArgs(FALSE); m <- grep("^--file=", ca, value = TRUE)
+  if (length(m)) return(normalizePath(sub("^--file=", "", m[1]), mustWork = FALSE))
+  for (i in rev(seq_len(sys.nframe()))) { of <- sys.frame(i)$ofile
+    if (!is.null(of)) return(normalizePath(of, mustWork = FALSE)) }
+  if (requireNamespace("rstudioapi", quietly = TRUE) && rstudioapi::isAvailable()) {
+    p <- tryCatch(rstudioapi::getSourceEditorContext()$path, error = function(e) "")
+    if (nzchar(p)) return(normalizePath(p, mustWork = FALSE)) }
+  NA_character_
 }
-script_dir <- if (!is.na(this_file) && nzchar(this_file)) dirname(this_file) else getwd()
-cat("Script folder:", script_dir, "\n")
-
-## ---------------------------------------------------------------- 1. packages
-need <- c("readxl", "metafor", "mada")
-for (p in need) if (!requireNamespace(p, quietly = TRUE)) {
-  cat("Installing", p, "...\n")
-  install.packages(p, repos = "https://cloud.r-project.org")
+.find_input <- function(fname) {
+  home <- if (.Platform$OS.type == "windows") Sys.getenv("USERPROFILE") else path.expand("~")
+  sp <- .this_file(); sd <- if (!is.na(sp)) dirname(sp) else NULL
+  cand <- unique(c(sd, file.path(sd, "data"), getwd(), file.path(getwd(), "data"),
+            file.path(home, c("Downloads","Desktop","Documents",
+                              "OneDrive/Downloads","OneDrive/Desktop","OneDrive/Documents"))))
+  for (d in cand) { if (is.null(d) || is.na(d) || !nzchar(d) || !dir.exists(d)) next
+    hit <- file.path(d, fname); if (file.exists(hit)) return(normalizePath(hit))
+    g <- list.files(d, pattern = fname, full.names = TRUE)
+    if (length(g)) return(normalizePath(g[1])) }
+  if (interactive()) { message("Couldn't auto-find ", fname, " - please pick it in the dialog.")
+                       return(file.choose()) }
+  stop("Could not find ", fname, " in:\n  ", paste(cand[!is.na(cand)], collapse = "\n  "))
 }
-suppressPackageStartupMessages({ library(readxl); library(metafor); library(mada) })
+INPUT_XLSX <- .find_input("Supplementary_Data_Extracted_Dataset_v6_final.xlsx")
+.SCRIPT_DIR <- tryCatch({ d <- dirname(.this_file()); if (is.na(d) || !nzchar(d)) getwd() else d },
+                        error = function(e) getwd())
+cat("Using dataset:\n  ", INPUT_XLSX, "\n", sep = "")
+OUT_DIR        <- file.path(.SCRIPT_DIR, "outputs")  # outputs land next to THIS script (repo root), not inside data/
+AUROC_METHOD   <- "PM"     # tau^2 estimator for AUROC + its SAs/subgroups (protocol = Paule-Mandel; "DL" reproduces the old draft's I2)
+PCC_ICC_METHOD <- "REML"   # Fisher-z pools, matches original 04_continuous_pools.R (REML)
+HSROC_METHOD   <- "ml"     # mada::reitsma estimation method (ML, per protocol)
 
-## ---------------------------------------------------------------- 2. find data
-DATA_NAME <- "Supplementary_Data_Extracted_Dataset.xlsx"
-search_dirs <- unique(c(
-  script_dir,
-  file.path(script_dir, "data"),
-  getwd(), file.path(getwd(), "data"),
-  file.path(path.expand("~"), "Desktop"),
-  file.path(path.expand("~"), "Desktop"),
-  file.path(path.expand("~"), "Desktop", "ai-pain-srma-code"),
-  file.path(path.expand("~"), "Desktop", "ai-pain-srma-code", "data")
-))
-hits <- character(0)
-# exact name first
-for (d in search_dirs) { f <- file.path(d, DATA_NAME); if (file.exists(f)) hits <- c(hits, f) }
-# then any .xlsx that looks like the dataset, searched recursively from script dir & desktop
-if (!length(hits)) {
-  roots <- unique(c(script_dir, getwd(), file.path(path.expand("~"), "Desktop")))
-  for (r in roots) if (dir.exists(r)) {
-    cand <- list.files(r, pattern = "(Extracted_Dataset|v17_final).*\\.xlsx$",
-                       recursive = TRUE, full.names = TRUE, ignore.case = TRUE)
-    hits <- c(hits, cand)
-  }
+dir.create(OUT_DIR, showWarnings = FALSE, recursive = TRUE)
+.need <- c("metafor", "mada", "readxl")
+.miss <- .need[!vapply(.need, requireNamespace, logical(1), quietly = TRUE)]
+if (length(.miss)) {
+  message("Installing missing packages: ", paste(.miss, collapse = ", "), " ...")
+  try(install.packages(.miss, repos = "https://cloud.r-project.org"))
+  .miss <- .need[!vapply(.need, requireNamespace, logical(1), quietly = TRUE)]
 }
-hits <- hits[file.exists(hits)]
-if (!length(hits)) {
-  stop("\n>>> Could not find the dataset '", DATA_NAME, "'.\n",
-       "    Put it in the SAME folder as this script (or a 'data' subfolder),\n",
-       "    then run again. Looked in:\n      ",
-       paste(search_dirs, collapse = "\n      "), "\n")
+if (length(.miss)) stop("Still missing: ", paste(.miss, collapse = ", "),
+                        "  -> install manually, then re-run.")
+suppressMessages({ library(metafor); library(mada); library(readxl) })
+
+## --- tee ALL console output into ONE file you send back to me ----------------
+while (sink.number() > 0) sink()
+.LOG <- file.path(OUT_DIR, "full_reproduction_log.txt")
+sink(.LOG, split = TRUE)
+cat("AI-Pain SR/MA -- full numbers run on v6_final  (", format(Sys.time()), ")\n", sep = "")
+
+## ---- 1. LOAD + SHARED HELPERS ----------------------------------------------
+S <- as.data.frame(read_excel(INPUT_XLSX, sheet = "Studies"))
+cat(sprintf("Loaded 'Studies': N = %d rows\n", nrow(S)))     # expect 188
+
+flag <- function(x) tolower(trimws(as.character(x))) %in% c("true", "1", "yes", "y")
+n2   <- function(x) suppressWarnings(as.numeric(as.character(x)))
+
+# robust prediction-interval extractor (metafor renamed cr.* -> pi.* across versions)
+get_pi <- function(pp) {
+  lb <- if (!is.null(pp$pi.lb)) pp$pi.lb else pp$cr.lb
+  ub <- if (!is.null(pp$pi.ub)) pp$pi.ub else pp$cr.ub
+  c(lb = lb, ub = ub)
 }
-DATA_FILE <- hits[1]
-cat("Using dataset:", DATA_FILE, "\n\n")
 
-OUT_DIR <- file.path(script_dir, "outputs")
-if (!dir.exists(OUT_DIR)) dir.create(OUT_DIR, showWarnings = FALSE)
+cat("\nPool sizes (flagged):\n")
+print(c(AUROC = sum(flag(S$in_AUROC_pool_main)),   # 63 flagged; 62 analysable (see below)
+        HSROC = sum(flag(S$in_HSROC_pool)),         # 11
+        PCC   = sum(flag(S$in_PCC_pool_main)),      # 31
+        ICC   = sum(flag(S$in_ICC_pool_main)),      # 22
+        MAE   = sum(flag(S$in_MAE_pool_main))))     # 0
 
-## ---------------------------------------------------------------- 3. load + prep
-d <- as.data.frame(read_excel(DATA_FILE, sheet = "Studies"))
-flag <- function(x) toupper(trimws(as.character(x))) %in% c("1","TRUE","YES","Y","T")
-num  <- function(x) suppressWarnings(as.numeric(as.character(x)))
-logit <- function(p) log(p/(1-p)); inv_logit <- function(x) 1/(1+exp(-x))
+## ============================================================================
+## 2. AUROC POOL — logit-IV, Hanley & McNeil variance (prevalence 0.5),
+##    Paule-Mandel tau^2.   k = 62
+## ============================================================================
+A <- S[flag(S$in_AUROC_pool_main), ]
+A$auc <- n2(A$AUROC_numeric)
+A$N   <- n2(A$N_numeric)
 
-d$f_hsroc <- flag(d$in_HSROC_pool); d$f_auroc <- flag(d$in_AUROC_pool_main)
-d$f_mae <- flag(d$in_MAE_pool_main); d$f_pcc <- flag(d$in_PCC_pool_main); d$f_icc <- flag(d$in_ICC_pool_main)
+drop_auc <- A[is.na(A$auc) | is.na(A$N), c("study_id", "first_author", "AUROC_numeric")]
+A <- A[!is.na(A$auc) & !is.na(A$N) & A$auc > 0 & A$auc < 1, ]
+cat(sprintf("\nAUROC: flagged = %d | analysable (non-missing N) = %d | excluded = %d {%s}\n",
+            sum(flag(S$in_AUROC_pool_main)), nrow(A), nrow(drop_auc),
+            paste(drop_auc$study_id, collapse = ", ")))   # excluded: Cascella_2023 (no usable N)
 
-cat(sprintf("Loaded %d studies, %d columns.\n", nrow(d), ncol(d)))
-cat(sprintf("Pool sizes:  HSROC=%d  AUROC=%d  MAE=%d  PCC=%d  ICC=%d   (paper: 14/69/43/35/25)\n",
-            sum(d$f_hsroc), sum(d$f_auroc), sum(d$f_mae), sum(d$f_pcc), sum(d$f_icc)))
-cat(sprintf("In >=1 pool: %d of %d   (paper: 117 of 189)\n\n",
-            sum(d$f_hsroc|d$f_auroc|d$f_mae|d$f_pcc|d$f_icc), nrow(d)))
-
-results <- list()
-
-## ---------------------------------------------------------------- 4. HSROC
-cat("----- HSROC (2x2 pool) -----  paper: sens 0.904, spec 0.912, AUC 0.951\n")
-tab <- data.frame(TP=num(d$TP_num), FP=num(d$FP_num), FN=num(d$FN_num), TN=num(d$TN_num))[d$f_hsroc, ]
-tab <- tab[complete.cases(tab) & rowSums(tab) > 0, ]
-fit <- reitsma(tab, method = "ml"); s <- summary(fit)
-co <- s$coefficients
-sens <- plogis(co["tsens.(Intercept)","Estimate"])
-spec <- 1 - plogis(co["tfpr.(Intercept)","Estimate"])
-sens_ci <- plogis(co["tsens.(Intercept)", c("95%ci.lb","95%ci.ub")])
-spec_ci <- rev(1 - plogis(co["tfpr.(Intercept)", c("95%ci.lb","95%ci.ub")]))
-auc  <- s$AUC$AUC
-cat(sprintf("  k=%d   sens=%.3f [%.3f, %.3f]   spec=%.3f [%.3f, %.3f]   AUC=%.3f\n\n",
-            nrow(tab), sens, sens_ci[1], sens_ci[2], spec, spec_ci[1], spec_ci[2], auc))
-results$HSROC <- list(k=nrow(tab), sens=sens, spec=spec, auc=auc,
-                      sens_ci=sens_ci, spec_ci=spec_ci)
-
-## ---------------------------------------------------------------- 5. AUROC
-cat("----- AUROC pool -----  paper: 0.904 [0.879, 0.924], I2 94.5%, PI 0.618-0.982\n")
-ap <- d[d$f_auroc, ]; a <- num(ap$AUROC_numeric); n <- num(ap$N_numeric)
-ok <- !is.na(a) & !is.na(n) & a>0 & a<1 & n>0
-a <- a[ok]; n <- n[ok]
-hanley <- function(au, np, nn){ q1<-au/(2-au); q2<-2*au^2/(1+au)
-  (au*(1-au)+(np-1)*(q1-au^2)+(nn-1)*(q2-au^2))/(np*nn) }
-vraw <- mapply(function(au,nn) hanley(au, nn/2, nn/2), a, n)
-yi <- logit(a); vi <- vraw/((a*(1-a))^2)
-m <- rma(yi=yi, vi=vi, method="PM"); pr <- predict(m)
-cat(sprintf("  k=%d weighted   AUROC=%.3f [%.3f, %.3f]   I2=%.1f%%   PI [%.3f, %.3f]\n",
-            length(a), inv_logit(m$b[1]), inv_logit(m$ci.lb), inv_logit(m$ci.ub),
-            m$I2, inv_logit(pr$pi.lb), inv_logit(pr$pi.ub)))
-egg <- regtest(m, model="lm")
-cat(sprintf("  Egger p = %.3f   (paper 0.41)\n\n", egg$pval))
-results$AUROC <- list(k=length(a), est=inv_logit(m$b[1]),
-                      ci=c(inv_logit(m$ci.lb),inv_logit(m$ci.ub)), I2=m$I2,
-                      pi=c(inv_logit(pr$pi.lb),inv_logit(pr$pi.ub)), egger=egg$pval)
-
-## ---------------------------------------------------------------- 6. continuous
-fisher_pool <- function(r, n, label, paper){
-  ok <- !is.na(r) & !is.na(n) & abs(r)<1 & n>3
-  z <- atanh(r[ok]); vi <- 1/(n[ok]-3)
-  m <- rma(yi=z, vi=vi, method="PM"); pr <- predict(m)
-  cat(sprintf("  %-4s k=%d   pooled=%.3f [%.3f, %.3f]   I2=%.1f%%   (paper %s)\n",
-              label, sum(ok), tanh(m$b[1]), tanh(m$ci.lb), tanh(m$ci.ub), m$I2, paper))
-  list(k=sum(ok), est=tanh(m$b[1]), ci=c(tanh(m$ci.lb),tanh(m$ci.ub)), I2=m$I2)
+hm_var <- function(auc, N) {                 # Hanley & McNeil (1982), n_pos = n_neg = N/2
+  npos <- N / 2; nneg <- N / 2
+  Q1 <- auc / (2 - auc); Q2 <- 2 * auc^2 / (1 + auc)
+  (auc * (1 - auc) + (npos - 1) * (Q1 - auc^2) + (nneg - 1) * (Q2 - auc^2)) / (npos * nneg)
 }
-cat("----- Continuous pools -----\n")
-# MAE: SE = MAE/sqrt(N)
-mp <- d[d$f_mae, ]; mae <- num(mp$MAE_standardized_0_10); nm <- num(mp$N_numeric)
-okm <- !is.na(mae)&!is.na(nm)&nm>0; vi <- (mae[okm]/sqrt(nm[okm]))^2
-mm <- rma(yi=mae[okm], vi=vi, method="PM"); prm <- predict(mm)
-cat(sprintf("  MAE  k=%d   pooled=%.2f [%.2f, %.2f]   I2=%.1f%%   (paper 0.79 [0.57,1.01], I2 100%%)\n",
-            sum(okm), mm$b[1], mm$ci.lb, mm$ci.ub, mm$I2))
-results$MAE <- list(k=sum(okm), est=as.numeric(mm$b[1]), I2=mm$I2)
-results$PCC <- fisher_pool(num(d$pearson_r_numeric)[d$f_pcc], num(d$N_numeric)[d$f_pcc], "PCC", "0.688 [0.596,0.763], I2 93.2%")
-results$ICC <- fisher_pool(num(d$ICC_numeric)[d$f_icc], num(d$N_numeric)[d$f_icc], "ICC", "0.638 [0.511,0.737], I2 94.3%")
-cat("\n")
+A$v_auc <- mapply(hm_var, A$auc, A$N)
+A$yi <- qlogis(A$auc)                                   # logit scale
+A$vi <- A$v_auc / (A$auc * (1 - A$auc))^2               # delta-method var on logit scale
 
-## ---------------------------------------------------------------- 7. subgroups SG1-SG8
-cat("----- Subgroups SG1-SG8 (AUROC pool) -----  paper: all Q_M p >= 0.25 (no difference)\n")
-ap2 <- d[d$f_auroc, ]; a2 <- num(ap2$AUROC_numeric); n2 <- num(ap2$N_numeric)
-keep <- !is.na(a2)&!is.na(n2)&a2>0&a2<1&n2>0
-ap2 <- ap2[keep,]; a2<-a2[keep]; n2<-n2[keep]
-ap2$yi <- logit(a2); ap2$vi <- mapply(function(au,nn) hanley(au,nn/2,nn/2), a2, n2)/((a2*(1-a2))^2)
+m_auc  <- rma(yi = yi, vi = vi, data = A, method = AUROC_METHOD)
+pp_auc <- predict(m_auc, transf = transf.ilogit)
+pi_auc <- get_pi(pp_auc)
+auroc_res <- data.frame(
+  outcome = "AUROC", k = m_auc$k,
+  est   = transf.ilogit(m_auc$b)[1],
+  ci.lb = transf.ilogit(m_auc$ci.lb), ci.ub = transf.ilogit(m_auc$ci.ub),
+  pi.lb = pi_auc["lb"], pi.ub = pi_auc["ub"],
+  I2 = m_auc$I2, tau2 = m_auc$tau2)
+cat("\n--- AUROC pooled ---\n"); print(auroc_res, row.names = FALSE, digits = 3)
 
-low <- function(x) tolower(ifelse(is.na(x),"",as.character(x)))
-ap2$SG1 <- ifelse(num(ap2$modality_count)>=2,"Multimodal","Single")
-ap2$SG2 <- sapply(ap2$modality_list, function(s){s<-low(s); if(s=="")NA else if(length(strsplit(s,",")[[1]])>=2)"Multimodal" else if(grepl("fac",s))"Facial" else if(grepl("physio|eeg|ecg|eda|emg",s))"Physiological" else if(grepl("voice|cry|audio",s))"Voice/cry" else "Other"})
-ap2$SG3 <- sapply(ap2$clinical_setting, function(s){s<-low(s); if(grepl("nicu|neonat|infant",s))"Neonatal" else if(grepl("icu|critical",s))"ICU" else if(grepl("postop|surg|pacu",s))"Postoperative" else "Chronic/other"})
-ap2$SG4 <- sapply(ap2$task_type, function(s){s<-low(s); if(startsWith(s,"binary"))"Binary" else if(grepl("multi",s))"Multi-class" else if(grepl("regress",s))"Regression" else "Other"})
-ap2$SG5 <- sapply(ap2$architecture, function(s){s<-low(s); if(grepl("cnn|lstm|rnn|transformer|deep|resnet|vgg|gan|dnn|u-net|vit|bilstm",s))"Deep learning" else if(grepl("svm|forest|boost|knn|logistic|tree|bayes|lda",s))"Traditional ML" else "Other"})
-ap2$SG6 <- sapply(ap2$ref_std_macro, function(s){if(grepl("Self-report",s))"Self-report" else if(grepl("Other|mixed",s))"Other" else "Expert observational"})
-ap2$SG7 <- c("internal-only"="Internal CV","independent"="Independent","external"="External")[as.character(ap2$SG7_testing_stratum)]
-ap2$SG8 <- sapply(ap2$data_collection_env, function(s){if(identical(s,"Lab"))"Lab" else if(identical(s,"Clinical"))"Bedside" else "Mixed"})
-
-sg_names <- c(SG1="Modality count",SG2="Modality type",SG3="Setting",SG4="Task type",
-              SG5="Architecture",SG6="Reference std",SG7="Testing strategy",SG8="Environment")
-sg_rows <- list()
-for (code in names(sg_names)) {
-  g <- ap2[[code]]; tab <- table(g); keep <- names(tab)[tab>=3]
-  sub <- ap2[g %in% keep, ]
-  if (length(keep)>=2) {
-    mm <- rma(yi=sub$yi, vi=sub$vi, mods=~factor(sub[[code]]), method="PM")
-    cat(sprintf("  %-3s %-16s Q_M p=%.3f  (%d levels)\n", code, sg_names[code], mm$QMp, length(keep)))
-    for (lv in names(tab)) if (tab[[lv]]>=3) {
-      s1 <- ap2[g==lv,]; m1 <- rma(yi=s1$yi, vi=s1$vi, method="PM")
-      sg_rows[[length(sg_rows)+1]] <- data.frame(SG=code, Axis=sg_names[code], Level=lv,
-        k=as.integer(tab[[lv]]), AUROC=round(inv_logit(m1$b[1]),3), Q_M_p=round(mm$QMp,3))
-    }
-  }
+## ============================================================================
+## 3. PCC and ICC POOLS — Fisher-z random effects
+## ============================================================================
+fisher_pool <- function(df, valcol) {
+  df$r <- n2(df[[valcol]]); df$N <- n2(df$N_numeric)
+  df <- df[!is.na(df$r) & !is.na(df$N) & df$r > -1 & df$r < 1 & df$N > 3, ]
+  es <- escalc(measure = "ZCOR", ri = r, ni = N, data = df)
+  m  <- rma(yi, vi, data = es, method = PCC_ICC_METHOD)
+  pp <- predict(m, transf = transf.ztor); pii <- get_pi(pp)
+  data.frame(k = m$k,
+             est   = transf.ztor(m$b)[1],
+             ci.lb = transf.ztor(m$ci.lb), ci.ub = transf.ztor(m$ci.ub),
+             pi.lb = pii["lb"], pi.ub = pii["ub"],
+             I2 = m$I2, tau2 = m$tau2)
 }
-cat("\n")
+pcc_res <- fisher_pool(S[flag(S$in_PCC_pool_main), ], "pearson_r_numeric")
+icc_res <- fisher_pool(S[flag(S$in_ICC_pool_main), ], "ICC_numeric")
+cat("\n--- PCC pooled ---\n"); print(pcc_res, row.names = FALSE, digits = 3)
+cat("\n--- ICC pooled ---\n"); print(icc_res, row.names = FALSE, digits = 3)
 
-## ---------------------------------------------------------------- 8. save
-sg_df <- do.call(rbind, sg_rows)
-write.csv(sg_df, file.path(OUT_DIR, "SG1-SG8_results.csv"), row.names = FALSE)
+# Egger's test for PCC and ICC (matches original 04_continuous_pools.R)
+egger_z <- function(df, valcol) {
+  df$r <- n2(df[[valcol]]); df$N <- n2(df$N_numeric)
+  df <- df[!is.na(df$r) & !is.na(df$N) & df$r > -1 & df$r < 1 & df$N > 3, ]
+  es <- escalc(measure = "ZCOR", ri = r, ni = N, data = df)
+  regtest(rma(yi, vi, data = es, method = PCC_ICC_METHOD), model = "lm")$pval
+}
+cat(sprintf("PCC Egger p = %.3f | ICC Egger p = %.3f\n",
+            egger_z(S[flag(S$in_PCC_pool_main), ], "pearson_r_numeric"),
+            egger_z(S[flag(S$in_ICC_pool_main), ], "ICC_numeric")))
 
-summary_lines <- c(
-  "AI pain assessment DTA meta-analysis — reproduction results",
-  sprintf("Dataset: %s", basename(DATA_FILE)),
-  sprintf("Pools: HSROC=%d AUROC=%d MAE=%d PCC=%d ICC=%d",
-          results$HSROC$k, results$AUROC$k, results$MAE$k, results$PCC$k, results$ICC$k),
-  sprintf("HSROC: sens=%.3f spec=%.3f AUC=%.3f", results$HSROC$sens, results$HSROC$spec, results$HSROC$auc),
-  sprintf("AUROC: %.3f [%.3f, %.3f] I2=%.1f%% PI [%.3f, %.3f] Egger p=%.3f",
-          results$AUROC$est, results$AUROC$ci[1], results$AUROC$ci[2], results$AUROC$I2,
-          results$AUROC$pi[1], results$AUROC$pi[2], results$AUROC$egger),
-  sprintf("MAE: %.2f I2=%.1f%%", results$MAE$est, results$MAE$I2),
-  sprintf("PCC: %.3f [%.3f, %.3f] I2=%.1f%%", results$PCC$est, results$PCC$ci[1], results$PCC$ci[2], results$PCC$I2),
-  sprintf("ICC: %.3f [%.3f, %.3f] I2=%.1f%%", results$ICC$est, results$ICC$ci[1], results$ICC$ci[2], results$ICC$I2),
-  "",
-  paste(capture.output(print(sg_df, row.names = FALSE)), collapse = "\n")
+## ============================================================================
+## 4. HSROC POOL — bivariate (Reitsma) model, mada, method = ML.   k = 11
+##    *** R-only: do not attempt to reproduce this in Python. ***
+## ============================================================================
+H <- S[flag(S$in_HSROC_pool), ]
+H$TP <- n2(H$TP_num); H$FP <- n2(H$FP_num); H$TN <- n2(H$TN_num); H$FN <- n2(H$FN_num)
+H <- H[complete.cases(H[, c("TP", "FP", "TN", "FN")]), ]
+cat(sprintf("\nHSROC: k = %d\n", nrow(H)))
+
+fit  <- reitsma(H, formula = cbind(tsens, tfpr) ~ 1, method = HSROC_METHOD, correction = 0.5)
+sm   <- summary(fit)
+cat("\n--- HSROC Reitsma summary (sensitivity / false-positive rate / AUC) ---\n")
+print(sm)
+hsroc_auc <- tryCatch(AUC(fit)$AUC, error = function(e) NA_real_)
+cat(sprintf("HSROC summary AUC = %.3f\n", hsroc_auc))
+writeLines(capture.output(print(sm), sprintf("AUC = %.4f", hsroc_auc)),
+           file.path(OUT_DIR, "HSROC_reitsma_summary.txt"))
+obs_sens <- H$TP / (H$TP + H$FN)         # observed points for the SROC plot
+obs_fpr  <- H$FP / (H$FP + H$TN)
+
+## ============================================================================
+## 5. MAE — DESCRIPTIVE ONLY (Supplementary Table S4; no meta-analysis)
+## ============================================================================
+keepM <- !is.na(n2(S$MAE)) | !is.na(n2(S$MSE)) | !is.na(n2(S$MAE_standardized_0_10))
+Mtab  <- S[keepM, c("study_id", "first_author", "year",
+                    "MAE", "MSE", "MAE_scale", "MAE_standardized_0_10", "primary_task")]
+write.csv(Mtab, file.path(OUT_DIR, "S4_MAE_descriptive.csv"), row.names = FALSE, na = "")
+cat(sprintf("\nMAE descriptive: %d studies reporting MAE/MSE -> S4_MAE_descriptive.csv\n",
+            nrow(Mtab)))
+
+## ============================================================================
+## 6. SENSITIVITY ANALYSES (AUROC primary outcome) -> Table S8
+##    Masks taken verbatim from the deposited sensitivity_analyses_S8.R
+##    (Main + SA1-SA6 + two Fig-cross-check rows). A already carries yi/vi, so
+##    each row is just a re-pool of a subset of the analysable pool A.
+##    NB: the deposited script's target comment (0.904, k=68) was the PRE-clean
+##    pool; here the same masks run on the finalised pool (k=62) -> new numbers.
+## ============================================================================
+pool_yi <- function(df) {
+  if (nrow(df) < 2)
+    return(data.frame(k = nrow(df), est = NA, ci.lb = NA, ci.ub = NA, I2 = NA))
+  m <- rma(yi, vi, data = df, method = AUROC_METHOD)
+  data.frame(k = m$k, est = transf.ilogit(m$b)[1],
+             ci.lb = transf.ilogit(m$ci.lb), ci.ub = transf.ilogit(m$ci.ub), I2 = m$I2)
+}
+
+# --- SA5: extract a GENUINE reference inter-rater kappa from free text -------
+# matches Cohen/Fleiss/weighted/Greek kappa with a numeric value; ignores ICC,
+# Pearson, percentages. Then drops (a) studies whose reported statistic is not a
+# reference-standard kappa (EXCL5), and (b) model-vs-human agreement values.
+extract_kappa <- function(s) {
+  s   <- ifelse(is.na(s), "", as.character(s))
+  pat <- "(?i).*?(?:cohen|fleiss|weighted)?\\s*(?:kappa|\u03ba)\\s*[()0-9,. ]*?=\\s*([01]?\\.[0-9]+).*"
+  has <- grepl(pat, s, perl = TRUE)
+  out <- rep(NA_real_, length(s)); out[has] <- as.numeric(sub(pat, "\\1", s[has], perl = TRUE)); out
+}
+EXCL5 <- "Xu_2020|Aydin_2023|Wibowo_2023|Alkan_2025|Oznaneci_2025"
+A$kappa      <- extract_kappa(A$inter_rater_reliability)
+A$is_excl5   <- grepl(EXCL5, A$study_id, ignore.case = TRUE)
+A$modelhuman <- grepl("model[ -]?(vs|versus|human|self)", A$inter_rater_reliability, ignore.case = TRUE)
+
+SA_masks <- list(
+  "Main (all weighted)"          = rep(TRUE, nrow(A)),
+  "SA1 exclude HIGH RoB"         = toupper(A$overall_RoB) != "HIGH",                                   # keeps LOW+UNCLEAR
+  "SA2 N>=30"                    = A$N >= 30,
+  "SA3 externally tested"        = grepl("independent|external", A$SG7_testing_stratum, ignore.case = TRUE),
+  "SA4 self-report reference"    = grepl("self.?report", A$ref_std_macro, ignore.case = TRUE),
+  "SA5 IRR kappa>=0.70"          = !is.na(A$kappa) & A$kappa >= 0.70 & !A$is_excl5 & !A$modelhuman,
+  "SA6 exclude UNBC/public-only" = A$silo_4macro != "UNBC",
+  "[chk] LOW RoB only (Fig6)"    = toupper(A$overall_RoB) == "LOW",
+  "[chk] external only"          = grepl("external", A$SG7_testing_stratum, ignore.case = TRUE))
+
+main_est <- pool_yi(A)$est
+SA <- do.call(rbind, lapply(names(SA_masks), function(nm) {
+  v <- pool_yi(A[SA_masks[[nm]], , drop = FALSE])
+  data.frame(Analysis = nm, k = v$k, AUROC = round(v$est, 3),
+             CI = ifelse(is.na(v$ci.lb), NA, sprintf("%.3f-%.3f", v$ci.lb, v$ci.ub)),
+             I2 = round(v$I2, 1), Delta = round(v$est - main_est, 3), row.names = NULL)
+}))
+cat("\n--- Table S8: AUROC sensitivity analyses (Main + SA1-SA6 + 2 checks) ---\n")
+print(SA, row.names = FALSE)
+write.csv(SA, file.path(OUT_DIR, "S8_sensitivity_AUROC.csv"), row.names = FALSE)
+cat("\nSA5 studies kept (genuine reference kappa >= 0.70):\n")
+print(A[SA_masks[["SA5 IRR kappa>=0.70"]], c("study_id", "kappa", "inter_rater_reliability")], row.names = FALSE)
+
+# Influence diagnostic (NOT one of the 6 registered SAs): leave-one-out on the pool
+loo <- leave1out(m_auc)
+loo_tab <- data.frame(omitted = A$study_id, est = transf.ilogit(loo$estimate), I2 = loo$I2)
+write.csv(loo_tab, file.path(OUT_DIR, "influence_leave_one_out.csv"), row.names = FALSE)
+cat(sprintf("\nLeave-one-out (influence, not a registered SA): AUROC %.3f - %.3f over %d omissions\n",
+            min(loo_tab$est), max(loo_tab$est), nrow(loo_tab)))
+
+## ============================================================================
+## 7. SUBGROUPS SG1-SG8 (Table 4 / S7) -- derivations & method match the
+##    deposited 01_data_prep.R + 05_subgroups_SG1-SG8.R EXACTLY:
+##    per-stratum pooling = REML, minimum k = 3 per stratum, REML moderator test.
+## ============================================================================
+# --- SG factor derivations (verbatim logic from 01_data_prep.R) -------------
+classify_modality <- function(ml) {
+  s <- tolower(trimws(ml)); if (is.na(s) || s == "") return(NA_character_)
+  has_face <- grepl("fac", s); n_types <- length(strsplit(s, ",")[[1]])
+  has_physio <- grepl("physiolog|eeg|ecg|bioimped|skin", s)
+  if (n_types >= 2 || (has_face && has_physio)) return("Multimodal")
+  if (has_face) return("Facial"); if (has_physio) return("Physiological"); "Other"
+}
+classify_task <- function(t) {
+  s <- tolower(trimws(t)); if (is.na(s) || s == "") return(NA_character_)
+  if (grepl("binary", s)) return("Binary"); if (grepl("multi", s)) return("Multi-class")
+  if (grepl("regress", s)) return("Regression"); "Other"
+}
+classify_arch <- function(a) {
+  s <- tolower(trimws(a)); if (is.na(s) || s == "") return(NA_character_)
+  dl <- grepl("cnn|convolutional|lstm|gru|rnn|transformer|vit|resnet|vgg|inception|densenet|deep|gan|autoencoder|u-net|efficientnet|alexnet|googlenet|mobilenet|bilstm|n-cnn|i3d|c3d|bert|gpt|gemini|belief network|neural network|mlp|perceptron", s)
+  if (dl) "Deep learning" else "Traditional ML"
+}
+A$SG1_modality_count     <- ifelse(n2(A$modality_count) >= 2, "Multimodal", "Single-modality")
+A$SG2_modality_type      <- vapply(A$modality_list, classify_modality, character(1))
+A$SG3_setting            <- trimws(as.character(A$setting_macro))
+A$SG4_task_type          <- vapply(A$task_type, classify_task, character(1))
+A$SG5_architecture       <- vapply(A$architecture, classify_arch, character(1))
+A$SG6_reference_standard <- trimws(as.character(A$ref_std_macro))
+A$SG7_testing_strategy   <- trimws(as.character(A$SG7_testing_stratum))
+A$SG8_environment        <- trimws(as.character(A$data_collection_env))
+
+# --- PATCH (this run): collapse SG3->4 & SG6->3 levels, relabel SG8, to match
+#     the manuscript's ORIGINAL S7 / Table-4 presentation. Pure relabel of the
+#     macro columns; pooling method (per-stratum REML, min k=3) is unchanged. ---
+.collapse <- function(x, map, default) {
+  x <- trimws(as.character(x)); out <- unname(map[x]); out[is.na(out)] <- default
+  out[is.na(x) | x == "" | x == "NA"] <- NA_character_; out
+}
+A$SG3_setting <- .collapse(A$SG3_setting,
+  c("NICU" = "Neonatal", "ICU (adult)" = "ICU", "Postoperative" = "Postoperative"),
+  default = "Chronic/other")        # Chronic pain / Other clinical / Oncology-SCD / Lab-benchmark -> Chronic/other
+A$SG6_reference_standard <- .collapse(A$SG6_reference_standard,
+  c("Self-report (NRS/VAS)" = "Self-report", "Other/mixed" = "Other"),
+  default = "Expert observational") # PSPI-FACS + Neonatal-behavioral + Expert-observer + Adult-behavioral -> Expert observational
+A$SG8_environment <- .collapse(A$SG8_environment,
+  c("Clinical" = "Real bedside", "Lab" = "Lab", "Mixed" = "Mixed"), default = NA_character_)
+cat("\n[collapsed for table] SG3 ->", paste(sort(unique(na.omit(A$SG3_setting))), collapse = " / "), "\n")
+cat(  "[collapsed for table] SG6 ->", paste(sort(unique(na.omit(A$SG6_reference_standard))), collapse = " / "), "\n")
+
+MIN_K <- 3
+pool_reml <- function(df) {
+  if (nrow(df) < 2) return(data.frame(k = nrow(df), est = NA, ci.lb = NA, ci.ub = NA))
+  m <- rma(yi, vi, data = df, method = "REML")
+  data.frame(k = m$k, est = transf.ilogit(m$b)[1],
+             ci.lb = transf.ilogit(m$ci.lb), ci.ub = transf.ilogit(m$ci.ub))
+}
+run_sg <- function(col, label) {
+  d <- A[!is.na(A[[col]]) & A[[col]] != "" & A[[col]] != "NA", ]
+  keep <- names(which(table(d[[col]]) >= MIN_K)); d <- d[d[[col]] %in% keep, ]
+  if (length(keep) < 2) { cat(sprintf("  [%s] <2 strata >= k%d\n", label, MIN_K)); return(NULL) }
+  per <- do.call(rbind, lapply(sort(keep), function(L)
+    cbind(SG = label, level = L, pool_reml(d[d[[col]] == L, ]))))
+  qm <- tryCatch({ mm <- rma(yi, vi, mods = ~ factor(d[[col]]), data = d, method = "REML")
+                   sprintf("Q_M=%.2f df=%d p=%.3f", mm$QM, mm$p - 1, mm$QMp) },
+                 error = function(e) NA_character_)
+  cat(sprintf("  [%s] %s\n", label, qm)); per
+}
+cat("\n--- AUROC subgroups SG1-SG8 (per-stratum REML, min k=3) ---\n")
+SG <- rbind(
+  run_sg("SG1_modality_count",     "SG1 Modality count"),
+  run_sg("SG2_modality_type",      "SG2 Modality type"),
+  run_sg("SG3_setting",            "SG3 Clinical setting"),
+  run_sg("SG4_task_type",          "SG4 Task type"),
+  run_sg("SG5_architecture",       "SG5 Architecture"),
+  run_sg("SG6_reference_standard", "SG6 Reference standard"),
+  run_sg("SG7_testing_strategy",   "SG7 Testing strategy"),
+  run_sg("SG8_environment",        "SG8 Environment"))
+print(SG, row.names = FALSE, digits = 3)
+write.csv(SG, file.path(OUT_DIR, "S7_subgroups_SG1-SG8.csv"), row.names = FALSE)
+
+# Silo meta-regression (SuppFig2 basis) -- 4-macro silo, REML
+m_silo <- rma(yi, vi, mods = ~ factor(silo_4macro), data = A, method = "REML")
+cat("\n--- Silo meta-regression (SuppFig2) ---\n")
+cat(sprintf("Q_moderator = %.2f, df = %d, p = %.4f\n",
+            m_silo$QM, m_silo$p - 1, m_silo$QMp))
+
+# Publication bias: AUROC (Egger) and HSROC (Deeks, unweighted -- matches 02_hsroc.R)
+cat("\n--- Egger's regression test (AUROC) ---\n")
+print(regtest(m_auc, model = "lm"))
+
+H$ess   <- 4 * (H$TP + H$FN) * (H$FP + H$TN) / ((H$TP + H$FN) + (H$FP + H$TN))
+H$lnDOR <- log(((H$TP + 0.5) * (H$TN + 0.5)) / ((H$FP + 0.5) * (H$FN + 0.5)))
+deeks <- summary(lm(lnDOR ~ I(1 / sqrt(ess)), data = H))   # Deeks' test (unweighted)
+cat("\n--- Deeks' funnel asymmetry test (HSROC) ---\n")
+print(deeks$coefficients)
+
+## ============================================================================
+## 8. SUMMARY TABLES regenerated for N = 188 (replace the stale 189 sheets)
+## ============================================================================
+quadas_cols <- c(`D1 Patient selection`  = "D1_PatientSelection_RoB",
+                 `D2 Index test`         = "D2_IndexTest_RoB",
+                 `D3 Reference standard`  = "D3_ReferenceStandard_RoB",
+                 `D4 Flow & timing`      = "D4_FlowTiming_RoB",
+                 `Overall`               = "overall_RoB")
+qd <- sapply(quadas_cols, function(c)
+  table(factor(toupper(trimws(S[[c]])), c("LOW", "UNCLEAR", "HIGH"))))
+qd <- t(qd)   # rows = domains, cols = LOW / UNCLEAR / HIGH
+write.csv(qd, file.path(OUT_DIR, "Summary_QUADAS2.csv"))
+
+sx <- addmargins(table(Silo = S$silo_4macro, RefStd = S$ref_std_macro))
+write.csv(sx, file.path(OUT_DIR, "Summary_Silo_x_RefStd.csv"))
+
+cat_cols <- c(`Cat 1 Frame-level random sampling`            = "Cat1_FrameLevelRandom",
+              `Cat 2 Sliding window w/o patient grouping`    = "Cat2_SlidingWindowNoGrouping",
+              `Cat 3 Cross-validation w/o patient grouping`  = "Cat3_CrossValNoPatientGrouping",
+              `Cat 5 IRR not reported or kappa < 0.70`       = "Cat5_IRR_NotReportedOrLow",
+              `Cat 6 Sole reliance on public benchmark`      = "Cat6_SoleRelianceOnPublicBenchmark",
+              `Cat 7 Class imbalance handling pre-split`     = "Cat7_ClassImbalanceHandlingPreSplit",
+              `Cat 8 Hyperparameter tuning on test set`      = "Cat8_HyperparameterTuningOnTest")
+lp <- data.frame(category = names(cat_cols),
+                 n = sapply(cat_cols, function(c) sum(flag(S[[c]]))),
+                 N = nrow(S), row.names = NULL)
+lp$pct <- sprintf("%.1f%%", 100 * lp$n / lp$N)
+write.csv(lp, file.path(OUT_DIR, "Summary_Leakage_Prevalence.csv"), row.names = FALSE)
+
+lb <- as.data.frame(table(indicators = n2(S$n_leakage_indicators)))
+lb$pct <- sprintf("%.1f%%", 100 * lb$Freq / nrow(S))
+lb$cum <- sprintf("%.1f%%", 100 * cumsum(lb$Freq) / nrow(S))
+names(lb)[2] <- "n"
+write.csv(lb, file.path(OUT_DIR, "Summary_Leakage_Burden.csv"), row.names = FALSE)
+
+cat("\nSummary tables written (QUADAS2 / Silo x RefStd / Leakage prevalence / burden).\n")
+cat("NOTE: 'Cohort_Clusters' is a curated qualitative table; verify it no longer\n",
+    "     references Cheng_2022 and keep its content otherwise unchanged.\n")
+
+## ============================================================================
+## 9. FIGURES — intentionally NOT produced here.
+##    All submission figures are built separately in Python to match the
+##    manuscript's existing house style (Fig3/Fig4/Fig5/Fig6/Fig7, SuppFig1-3/5).
+##    This script is the NUMBERS engine only -> no plotting, nothing to crash.
+## ============================================================================
+
+## ============================================================================
+## 8b. EXTRA DETERMINISTIC COUNTS  (Table 3 / Table 4 / abstract)
+##     Pure counts & Cramer's V -- no estimator, so these match any tool exactly.
+##     Each block is wrapped: a column mismatch warns but never stops the run.
+## ============================================================================
+cramer_v <- function(tab) {
+  ch <- suppressWarnings(chisq.test(tab, correct = FALSE))
+  n <- sum(tab); k <- min(nrow(tab), ncol(tab))
+  sprintf("chi2=%.1f  df=%d  p=%.3g  V=%.3f",
+          unname(ch$statistic), unname(ch$parameter), ch$p.value,
+          sqrt(as.numeric(ch$statistic) / (n * (k - 1))))
+}
+try({
+  cat("\n--- Studies contributing to >=1 of the 4 quantitative pools ---\n")
+  inpool <- flag(S$in_AUROC_pool_main) | flag(S$in_HSROC_pool) |
+            flag(S$in_PCC_pool_main)   | flag(S$in_ICC_pool_main)
+  cat(sprintf("  %d of %d  (%.1f%%)\n", sum(inpool), nrow(S), 100 * sum(inpool) / nrow(S)))
+})
+try({
+  cat("\n--- Per-pool RoB HIGH counts (GRADE / Table 4 / S10) ---\n")
+  hi <- function(fl) { d <- S[flag(fl), ]
+    sprintf("%d/%d", sum(toupper(trimws(d$overall_RoB)) == "HIGH"), nrow(d)) }
+  cat(sprintf("  HSROC %s | AUROC %s | PCC %s | ICC %s\n",
+      hi(S$in_HSROC_pool), hi(S$in_AUROC_pool_main), hi(S$in_PCC_pool_main), hi(S$in_ICC_pool_main)))
+})
+try({
+  cat("\n--- Cramer's V structural couplings (Table 3, N=188) ---\n")
+  cat("  S1 Silo x RefStd            ", cramer_v(table(S$silo_4macro, S$ref_std_macro)), "\n")
+  cat("  S2 Silo x Setting           ", cramer_v(table(S$silo_4macro, S$setting_macro)), "\n")
+  cat("  S3 Silo x Environment       ", cramer_v(table(S$silo_4macro, S$data_collection_env)), "\n")
+  cat("  S4 Silo x (RefStd x Setting)", cramer_v(table(S$silo_4macro,
+        interaction(S$ref_std_macro, S$setting_macro, drop = TRUE))), "\n")
+})
+try({
+  cat("\n--- MAE descriptive stats (S4 / Fig4b) ---\n")
+  mv <- n2(S$MAE_standardized_0_10); mv <- mv[!is.na(mv)]
+  cat(sprintf("  k(standardized MAE)=%d | median=%.2f | range=%.2f-%.2f | below MCID(2)=%d/%d\n",
+      length(mv), median(mv), min(mv), max(mv), sum(mv < 2), length(mv)))
+})
+
+## ---- 10. MASTER RESULTS TABLE ----------------------------------------------
+table2 <- rbind(
+  cbind(outcome = "AUROC", auroc_res[, c("k","est","ci.lb","ci.ub","pi.lb","pi.ub","I2")]),
+  cbind(outcome = "PCC",   pcc_res [, c("k","est","ci.lb","ci.ub","pi.lb","pi.ub","I2")]),
+  cbind(outcome = "ICC",   icc_res [, c("k","est","ci.lb","ci.ub","pi.lb","pi.ub","I2")])
 )
-writeLines(summary_lines, file.path(OUT_DIR, "reproduction_summary.txt"))
+write.csv(table2, file.path(OUT_DIR, "Table2_pooled_estimates.csv"), row.names = FALSE)
 
-cat("==================================================================\n")
-cat(" DONE. Results saved to:\n")
-cat("   ", file.path(OUT_DIR, "reproduction_summary.txt"), "\n")
-cat("   ", file.path(OUT_DIR, "SG1-SG8_results.csv"), "\n")
-cat("==================================================================\n")
-
-if (!interactive()) { cat("\nPress [Enter] to close..."); tryCatch(readLines("stdin", 1), error=function(e) NULL) }
+cat("\n=============================================================\n")
+cat("DONE (numbers only). Outputs in ./", OUT_DIR, "/ :\n", sep = "")
+cat("  Table2_pooled_estimates.csv  (AUROC/PCC/ICC; HSROC in the .txt)\n")
+cat("  HSROC_reitsma_summary.txt    (sens/spec/AUC -- authoritative)\n")
+cat("  S4_MAE_descriptive.csv\n")
+cat("  S7_subgroups_SG1-SG8.csv\n")
+cat("  S8_sensitivity_AUROC.csv  (Main + SA1-SA6 + 2 checks)\n")
+cat("  influence_leave_one_out.csv  (diagnostic, not a registered SA)\n")
+cat("  Summary_QUADAS2.csv / _Silo_x_RefStd.csv / _Leakage_Prevalence.csv / _Leakage_Burden.csv\n")
+cat("  full_reproduction_log.txt  <-- SEND ME THIS ONE FILE\n")
+cat("  (figures are generated in Python, not here)\n")
+cat("=============================================================\n")
+cat("\n>>> Full console log written to outputs/full_reproduction_log.txt\n")
+while (sink.number() > 0) sink()

@@ -14,7 +14,7 @@
 if (!requireNamespace("readxl", quietly = TRUE))
   stop("Package 'readxl' is required. Install with install.packages('readxl').")
 
-DATA_PATH <- file.path("data", "Supplementary_Data_Extracted_Dataset.xlsx")
+DATA_PATH <- file.path("data", "Supplementary_Data_Extracted_Dataset_v6_final.xlsx")
 if (!file.exists(DATA_PATH))
   stop("Dataset not found at ", DATA_PATH,
        ". Download it from the data archive (see README) and place it in ./data/.")
@@ -59,7 +59,7 @@ inv_logit <- function(x) 1 / (1 + exp(-x))
 ## (1982) formula -- the standard approach in ROC meta-analysis, which does not
 ## require the source paper to report a confidence interval. The variance is
 ## then mapped to the logit scale by the delta method. This reproduces the
-## published pooled AUROC of 0.904 [0.879, 0.924] exactly (see 03_auroc_pool.R).
+## published pooled AUROC of 0.887 [0.858, 0.911] exactly (see 03_auroc_pool.R).
 ##
 ## Hanley & McNeil variance of an AUROC `a` with `n_pos` positive and `n_neg`
 ## negative cases:
@@ -121,8 +121,16 @@ classify_modality <- function(ml) {
 }
 dat$SG2_modality_type <- vapply(dat$modality_list, classify_modality, character(1))
 
-## SG3 - clinical setting (macro categories as coded in the dataset).
-dat$SG3_setting <- trimws(as.character(dat$setting_macro))
+## Helper: collapse macro levels to the manuscript presentation (pure relabel).
+.collapse <- function(x, map, default) {
+  x <- trimws(as.character(x)); out <- unname(map[x]); out[is.na(out)] <- default
+  out[is.na(x) | x == "" | x == "NA"] <- NA_character_; out
+}
+## SG3 - clinical setting, collapsed to 4 levels (NICU->Neonatal; ICU (adult)->ICU;
+##       Postoperative; Chronic pain / Other clinical / Oncology-SCD / Lab-benchmark -> Chronic/other).
+dat$SG3_setting <- .collapse(dat$setting_macro,
+  c("NICU" = "Neonatal", "ICU (adult)" = "ICU", "Postoperative" = "Postoperative"),
+  default = "Chronic/other")
 
 ## SG4 - task type: binary / multi-class / regression (collapse narrative-only).
 classify_task <- function(t) {
@@ -145,14 +153,18 @@ classify_arch <- function(a) {
 }
 dat$SG5_architecture <- vapply(dat$architecture, classify_arch, character(1))
 
-## SG6 - reference standard (macro categories as coded in the dataset).
-dat$SG6_reference_standard <- trimws(as.character(dat$ref_std_macro))
+## SG6 - reference standard, collapsed to 3 levels (Self-report; Other/mixed->Other;
+##       PSPI-FACS + Neonatal-behavioral + Expert-observer + Adult-behavioral -> Expert observational).
+dat$SG6_reference_standard <- .collapse(dat$ref_std_macro,
+  c("Self-report (NRS/VAS)" = "Self-report", "Other/mixed" = "Other"),
+  default = "Expert observational")
 
 ## SG7 - testing strategy: pre-computed stratum column in the dataset.
 dat$SG7_testing_strategy <- trimws(as.character(dat$SG7_testing_stratum))
 
-## SG8 - data-collection environment (Lab / Clinical / Mixed).
-dat$SG8_environment <- trimws(as.character(dat$data_collection_env))
+## SG8 - data-collection environment ("Clinical" relabelled "Real bedside" to match the manuscript).
+dat$SG8_environment <- .collapse(dat$data_collection_env,
+  c("Clinical" = "Real bedside", "Lab" = "Lab", "Mixed" = "Mixed"), default = NA_character_)
 
 ## ---- overall risk of bias (QUADAS-2) ----------------------------------------
 dat$overall_RoB <- toupper(trimws(as.character(dat$overall_RoB)))

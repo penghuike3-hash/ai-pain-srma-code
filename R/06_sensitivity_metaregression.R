@@ -50,17 +50,29 @@ if ("in_AUROC_pool_SA2_N30" %in% names(dat)) {
 }
 line("S2 exclude N<30", s2)
 
-## S3 external-tested only (SG7 stratum == external)
-line("S3 external-tested only", ap[ap$SG7_testing_strategy == "external", ])
+## S3 externally/independently tested (SG7 stratum independent OR external).
+line("S3 externally/independently tested",
+     ap[grepl("independent|external", ap$SG7_testing_strategy, ignore.case = TRUE), ])
 
 ## S4 patient self-report reference standard only
 line("S4 self-report reference only",
      ap[grepl("self-report", tolower(ap$SG6_reference_standard)), ])
 
-## S5 inter-rater reliability reported (strict): Cat5 flag is "not reported / low",
-## so strict-IRR-reported is its negation.
-line("S5 IRR reported (strict)",
-     ap[!as_flag(ap$Cat5_IRR_NotReportedOrLow), ])
+## S5 genuine reference inter-rater kappa >= 0.70. The kappa is parsed from the
+## free-text reliability field; studies reporting model-vs-human agreement or a
+## non-reference statistic are excluded (EXCL5), matching the manuscript SA5.
+extract_kappa <- function(s) {
+  s <- ifelse(is.na(s), "", as.character(s))
+  pat <- "(?i).*?(?:cohen|fleiss|weighted)?\\s*(?:kappa|\u03ba)\\s*[()0-9,. ]*?=\\s*([01]?\\.[0-9]+).*"
+  has <- grepl(pat, s, perl = TRUE)
+  out <- rep(NA_real_, length(s)); out[has] <- as.numeric(sub(pat, "\\1", s[has], perl = TRUE)); out
+}
+.EXCL5 <- "Xu_2020|Aydin_2023|Wibowo_2023|Alkan_2025|Oznaneci_2025"
+ap$kappa      <- extract_kappa(ap$inter_rater_reliability)
+ap$is_excl5   <- grepl(.EXCL5, ap$study_id, ignore.case = TRUE)
+ap$modelhuman <- grepl("model[ -]?(vs|versus|human|self)", ap$inter_rater_reliability, ignore.case = TRUE)
+line("S5 IRR kappa>=0.70",
+     ap[!is.na(ap$kappa) & ap$kappa >= 0.70 & !ap$is_excl5 & !ap$modelhuman, ])
 
 ## S6 exclude sole-public-benchmark (UNBC-only) studies (Cat6 flag).
 line("S6 exclude sole-public-benchmark",

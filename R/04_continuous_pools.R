@@ -28,13 +28,15 @@ report <- function(label, res, back = identity) {
   invisible(res)
 }
 
-## ---- MAE (0-10): SE = MAE / sqrt(N); Paule-Mandel ---------------------------
-mae <- dat[dat$flag_mae & !is.na(dat$MAE_val) & !is.na(dat$mae_var), ]
-res_mae <- rma(yi = mae$MAE_val, vi = mae$mae_var, method = "PM")
-report("MAE (0-10)", res_mae)
-n_below_mcid <- sum(mae$MAE_val < 2, na.rm = TRUE)   # MCID = 2 NRS points
-message(sprintf("  MAE < MCID(2) in %d of %d studies.", n_below_mcid, nrow(mae)))
-message("  Egger's test not interpreted for MAE (SE-effect coupling).")
+## ---- MAE (0-10): DESCRIPTIVE ONLY -- NOT pooled -----------------------------
+## Error metrics and pain scales are not comparable across studies, so MAE is
+## summarised narratively (SWiM guidance) rather than meta-analysed.
+mae_vals <- dat$MAE_val[!is.na(dat$MAE_val)]
+message(sprintf(
+  "MAE (0-10) descriptive: k=%d  median=%.2f  range=%.2f-%.2f  below MCID(2)=%d/%d",
+  length(mae_vals), stats::median(mae_vals), min(mae_vals), max(mae_vals),
+  sum(mae_vals < 2), length(mae_vals)))
+message("  MAE is NOT pooled; no meta-analytic estimate and Egger's test not applicable.")
 
 ## ---- Pearson r: Fisher's z, REML --------------------------------------------
 pcc <- dat[dat$flag_pcc & !is.na(dat$pcc_z) & !is.na(dat$pcc_z_var), ]
@@ -50,4 +52,4 @@ report("ICC", res_icc, back = inv_fisher)
 egg_icc <- regtest(res_icc, model = "lm")
 message(sprintf("  Egger's test: p = %.3f", egg_icc$pval))
 
-invisible(list(mae = res_mae, pcc = res_pcc, icc = res_icc))
+invisible(list(mae_descriptive = mae_vals, pcc = res_pcc, icc = res_icc))

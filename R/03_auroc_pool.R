@@ -10,7 +10,7 @@
 ##          (set up in 01_data_prep.R) and mapped to the logit scale by the delta
 ##          method. This is the standard ROC-meta-analysis approach and requires
 ##          only AUROC and N -- both present in the dataset. It reproduces the
-##          published pooled AUROC of 0.904 [0.879, 0.924] exactly.
+##          published pooled AUROC of 0.887 [0.858, 0.911] exactly.
 ## =============================================================================
 
 if (!exists("dat")) source(file.path("R", "01_data_prep.R"))
@@ -21,7 +21,7 @@ suppressMessages(library(metafor))
 ## ---- assemble the AUROC pool ------------------------------------------------
 ## Pool membership is defined by the dataset flag. One study reports no usable N
 ## and so cannot be weighted; it is in the pool but excluded from the model
-## (reported as counted-not-weighted: 69 in pool, 68 weighted).
+## (reported as counted-not-weighted: 63 in pool, 62 weighted).
 pool_all <- dat[dat$flag_auroc, ]
 ap <- pool_all[!is.na(pool_all$auroc_logit) & !is.na(pool_all$auroc_logit_var), ]
 message(sprintf("AUROC pool: %d studies in pool, %d weighted (with usable N).",

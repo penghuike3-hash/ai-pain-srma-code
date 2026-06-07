@@ -1,0 +1,25 @@
+"SG","Axis","Level","k","AUROC","Q_M_p"
+"SG1","Modality count","Single-modality",50,0.876,0.217
+"SG1","Modality count","Multimodal",12,0.920,0.217
+"SG2","Modality type","Facial",33,0.893,0.999
+"SG2","Modality type","Multimodal",12,0.886,0.999
+"SG2","Modality type","Other",7,0.877,0.999
+"SG2","Modality type","Physiological",10,0.888,0.999
+"SG3","Clinical setting","Chronic/other",28,0.889,0.999
+"SG3","Clinical setting","ICU",6,0.853,0.999
+"SG3","Clinical setting","Neonatal",16,0.877,0.999
+"SG3","Clinical setting","Postoperative",12,0.900,0.999
+"SG4","Task type","Binary",43,0.875,0.298
+"SG4","Task type","Multi-class",5,0.970,0.298
+"SG4","Task type","Regression",13,0.892,0.298
+"SG5","Architecture","Deep learning",39,0.893,0.901
+"SG5","Architecture","Traditional ML",23,0.881,0.901
+"SG6","Reference standard","Expert observational",30,0.891,0.517
+"SG6","Reference standard","Other",10,0.868,0.517
+"SG6","Reference standard","Self-report",22,0.885,0.517
+"SG7","Testing strategy","external",4,0.874,0.551
+"SG7","Testing strategy","independent",8,0.861,0.551
+"SG7","Testing strategy","internal-only",50,0.890,0.551
+"SG8","Environment","Lab",17,0.902,0.649
+"SG8","Environment","Mixed",11,0.878,0.649
+"SG8","Environment","Real bedside",34,0.882,0.649

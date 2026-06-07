@@ -1,11 +1,11 @@
 # Data directory
 
-The analysis dataset is here:
+The analysis dataset is included here:
 
 ```
-Supplementary_Data_Extracted_Dataset.xlsx   (sheet "Studies", 189 rows)
+Supplementary_Data_Extracted_Dataset_v6_final.xlsx   (sheet "Studies", 188 rows × 99 columns)
 ```
 
-It is also archived at the Zenodo data DOI (see the top-level README). If you
-obtain the file elsewhere, place it in this folder with exactly this name, or
-just put it next to RUN_ME.R — the one-click runner searches both locations.
+`RUN_ME.R` and the modular `R/` scripts read it from this folder automatically. The
+same file is also archived at the Zenodo data DOI (see the top-level README); if you
+obtain it elsewhere, keep this exact name or place it next to `RUN_ME.R`.
